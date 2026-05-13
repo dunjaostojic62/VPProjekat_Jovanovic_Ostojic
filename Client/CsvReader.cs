@@ -104,7 +104,7 @@ namespace Client
                
                 if (!DateTime.TryParse(cols[idxUtc],
                                        CultureInfo.InvariantCulture,
-                                       DateTimeStyles.RoundtripKind | DateTimeStyles.AssumeUniversal,
+                                       DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal,
                                        out DateTime utcTime))
                 {
                     OdbaciRed(rowIndex, "Neispravan utc_timestamp", line);

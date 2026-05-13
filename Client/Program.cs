@@ -57,7 +57,8 @@ namespace Client
 
                     client.StartSession(meta);
                     Console.WriteLine("[Client] StartSession poslat.");
-
+                    bool simulateAbort = bool.TryParse(
+                            ConfigurationManager.AppSettings["simulateAbort"], out bool sa) && sa;
                     int poslato = 0;
                     for (int i = 0; i < uzorci.Count; i += batchSize)
                     {
@@ -66,6 +67,11 @@ namespace Client
                         client.PushBatch(batch);
                         poslato += velicina;
                         Console.WriteLine($"[Client] Blok poslat ({velicina} uzoraka). Ukupno: {poslato}/{uzorci.Count}");
+                        if (simulateAbort && poslato >= uzorci.Count / 2)
+                        {
+                            throw new InvalidOperationException(
+                                "[Client] SIMULACIJA: prekid prenosa nasred slanja!");
+                        }
                     }
                     client.EndSession();
                     Console.WriteLine("[Client] EndSession poslat.");
