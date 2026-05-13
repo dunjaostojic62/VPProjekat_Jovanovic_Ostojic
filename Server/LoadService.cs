@@ -2,6 +2,8 @@
 using System;
 using System.Collections.Generic;
 using System.ServiceModel;
+using System.Configuration;
+using System.IO;
 
 namespace Server
 {
@@ -12,6 +14,11 @@ namespace Server
         SessionMeta currentMeta;
         double lastCumulative;
         bool sessionActive;
+        FileStream sessionStream;
+        StreamWriter sessionWriter;
+        FileStream rejectsStream;
+        StreamWriter rejectsWriter;
+        string sessionFolder;
 
         public LoadService()
         {
@@ -44,14 +51,38 @@ namespace Server
                 throw new FaultException<ValidationFault>(
                     new ValidationFault("BatchSize mora biti > 0."));
             }
-
-            
             this.currentMeta = meta;
             this.sessionActive = true;
             this.lastCumulative = 0;
-
             Console.WriteLine($"[Server] StartSession primljen:");
             Console.WriteLine($"         {meta}");
+
+            //za data strukturu
+            string root = ConfigurationManager.AppSettings["dataFolderPath"];
+            if (string.IsNullOrWhiteSpace(root))
+            {
+                throw new FaultException<DataFormatFault>(
+                    new DataFormatFault("U App.config nije definisan kljuc 'dataFolderPath'."));
+            }
+
+            this.sessionFolder = Path.Combine(root,
+                                              meta.CountryCode,
+                                              meta.Date.ToString("yyyy-MM-dd"));
+
+            Directory.CreateDirectory(sessionFolder);
+
+            string sessionPath = Path.Combine(sessionFolder, "session.csv");
+            string rejectsPath = Path.Combine(sessionFolder, "rejects.csv");
+
+            sessionStream = new FileStream(sessionPath, FileMode.Create, FileAccess.Write);
+            sessionWriter = new StreamWriter(sessionStream);
+            sessionWriter.WriteLine("TimestampUtc,TimestampLocal,ActualMW,ForecastMW,CumulativeMWh,CountryCode,RowIndex");
+
+            rejectsStream = new FileStream(rejectsPath, FileMode.Create, FileAccess.Write);
+            rejectsWriter = new StreamWriter(rejectsStream);
+            rejectsWriter.WriteLine("RowIndex,Reason,OriginalSample");
+
+            Console.WriteLine($"         Izlazni folder: {sessionFolder}");
         }
 
         [OperationBehavior(AutoDisposeParameters = true)]
@@ -71,7 +102,28 @@ namespace Server
          
             foreach (LoadSample s in samples)
             {
-                ValidateSample(s);
+                try
+                {
+                    ValidateSample(s);
+                    sessionWriter.WriteLine(
+                        $"{s.TimestampUtc:yyyy-MM-ddTHH:mm:ssZ}," +
+                        $"{s.TimestampLocal:yyyy-MM-ddTHH:mm:sszzz}," +
+                        $"{s.ActualMW}," +
+                        $"{s.ForecastMW}," +
+                        $"{s.CumulativeMWh}," +
+                        $"{s.CountryCode}," +
+                        $"{s.RowIndex}");
+                }
+                catch (FaultException<DataFormatFault> fe)
+                {
+                    UpisiURejects(s, fe.Detail.Message);
+                    throw;
+                }
+                catch (FaultException<ValidationFault> fe)
+                {
+                    UpisiURejects(s, fe.Detail.Message);
+                    throw;
+                }
             }
 
             Console.WriteLine($"[Server] Blok primljen: {samples.Count} uzoraka. " +
@@ -84,9 +136,25 @@ namespace Server
             Console.WriteLine($"[Server] EndSession - prenos zavrsen za " +
                               $"{currentMeta?.CountryCode} ({currentMeta?.Date:yyyy-MM-dd}). " +
                               $"Finalni kumulativ: {lastCumulative:F2} MWh");
+            //zatvaranje stream-a
+            sessionWriter?.Flush();
+            rejectsWriter?.Flush();
+            sessionWriter?.Dispose();
+            sessionStream?.Dispose();
+            rejectsWriter?.Dispose();
+            rejectsStream?.Dispose();
+            Console.WriteLine($"[Server] Snimljeno u: {sessionFolder}");
         }
 
- 
+        private void UpisiURejects(LoadSample s, string razlog)
+        {
+            string original = $"UTC={s.TimestampUtc:yyyy-MM-ddTHH:mm:ssZ} " +
+                              $"Actual={s.ActualMW} Forecast={s.ForecastMW} " +
+                              $"Cumulative={s.CumulativeMWh}";
+            rejectsWriter.WriteLine($"{s.RowIndex},\"{razlog}\",\"{original}\"");
+            rejectsWriter.Flush();
+        }
+
         private void ValidateSample(LoadSample s)
         {
             if (s.TimestampUtc == DateTime.MinValue)
