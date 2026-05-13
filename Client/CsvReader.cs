@@ -1,7 +1,9 @@
 ﻿using Common;
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
+using System.ServiceModel;
 
 namespace Client
 {
@@ -43,17 +45,139 @@ namespace Client
 
             List<LoadSample> rezultat = new List<LoadSample>();
 
+           
             string headerLine = reader.ReadLine();
             if (headerLine == null)
             {
-                throw new InvalidDataException("CSV fajl je prazan ili nema header.");
+                throw new FaultException<DataFormatFault>(
+                    new DataFormatFault("CSV fajl je prazan ili nema header."));
             }
 
-            Console.WriteLine($"[CsvReader] Header procitan, broj kolona: {headerLine.Split(',').Length}");
+            string[] headers = headerLine.Split(',');
 
+            int idxUtc = Array.IndexOf(headers, "utc_timestamp");
+            int idxCet = Array.IndexOf(headers, "cet_cest_timestamp");
+
+            string actualKolona = $"{countryCode}_load_actual_entsoe_transparency";
+            string forecastKolona = $"{countryCode}_load_forecast_entsoe_transparency";
+            int idxActual = Array.IndexOf(headers, actualKolona);
+            int idxForecast = Array.IndexOf(headers, forecastKolona);
+
+            
+            if (idxUtc == -1 || idxCet == -1)
+            {
+                throw new FaultException<DataFormatFault>(
+                    new DataFormatFault(
+                        "CSV nema obavezne timestamp kolone (utc_timestamp / cet_cest_timestamp)."));
+            }
+
+            
+            if (idxActual == -1 || idxForecast == -1)
+            {
+                throw new FaultException<DataFormatFault>(
+                    new DataFormatFault(
+                        $"Za zemlju '{countryCode}' nedostaju kolone " +
+                        $"'{actualKolona}' i/ili '{forecastKolona}'."));
+            }
+
+            Console.WriteLine($"[CsvReader] Pronadjene kolone za '{countryCode}': " +
+                              $"actual={idxActual}, forecast={idxForecast}");
+
+           
+            string line;
+            int rowIndex = 0;
+            double kumulativMWh = 0;
+            int maxIdx = Math.Max(Math.Max(idxUtc, idxCet), Math.Max(idxActual, idxForecast));
+
+            while ((line = reader.ReadLine()) != null)
+            {
+                rowIndex++;
+                string[] cols = line.Split(',');
+
+                
+                if (cols.Length <= maxIdx)
+                {
+                    OdbaciRed(rowIndex, "Nedovoljan broj kolona", line);
+                    continue;
+                }
+
+               
+                if (!DateTime.TryParse(cols[idxUtc],
+                                       CultureInfo.InvariantCulture,
+                                       DateTimeStyles.RoundtripKind | DateTimeStyles.AssumeUniversal,
+                                       out DateTime utcTime))
+                {
+                    OdbaciRed(rowIndex, "Neispravan utc_timestamp", line);
+                    continue;
+                }
+
+                
+                if (utcTime.Date != selectedDate.Date)
+                {
+                    continue;
+                }
+
+               
+                if (!DateTime.TryParse(cols[idxCet],
+                                       CultureInfo.InvariantCulture,
+                                       DateTimeStyles.RoundtripKind,
+                                       out DateTime cetTime))
+                {
+                    OdbaciRed(rowIndex, "Neispravan cet_cest_timestamp", line);
+                    continue;
+                }
+
+                string actualStr = cols[idxActual];
+                string forecastStr = cols[idxForecast];
+
+                if (string.IsNullOrWhiteSpace(actualStr) ||
+                    actualStr.Equals("NaN", StringComparison.OrdinalIgnoreCase))
+                {
+                    OdbaciRed(rowIndex, "Prazno polje ili NaN u ActualMW", line);
+                    continue;
+                }
+                if (string.IsNullOrWhiteSpace(forecastStr) ||
+                    forecastStr.Equals("NaN", StringComparison.OrdinalIgnoreCase))
+                {
+                    OdbaciRed(rowIndex, "Prazno polje ili NaN u ForecastMW", line);
+                    continue;
+                }
+
+                if (!double.TryParse(actualStr, NumberStyles.Float,
+                                     CultureInfo.InvariantCulture, out double actualMW))
+                {
+                    OdbaciRed(rowIndex, "Nevalidan broj u ActualMW", line);
+                    continue;
+                }
+                if (!double.TryParse(forecastStr, NumberStyles.Float,
+                                     CultureInfo.InvariantCulture, out double forecastMW))
+                {
+                    OdbaciRed(rowIndex, "Nevalidan broj u ForecastMW", line);
+                    continue;
+                }
+
+               
+                double energyMWh = actualMW * 0.25;
+                kumulativMWh += energyMWh;
+
+                LoadSample sample = new LoadSample(
+                    utcTime,
+                    cetTime,
+                    actualMW,
+                    forecastMW,
+                    kumulativMWh,
+                    countryCode,
+                    rowIndex);
+
+                rezultat.Add(sample);
+            }
+
+            Console.WriteLine($"[CsvReader] Parsirano {rezultat.Count} validnih uzoraka za dan " +
+                              $"{selectedDate:yyyy-MM-dd}.");
             return rezultat;
         }
 
+        
         public void OdbaciRed(int rowIndex, string razlog, string original)
         {
             if (disposed)
@@ -64,6 +188,7 @@ namespace Client
             rejectedWriter.WriteLine($"{rowIndex},\"{razlog}\",\"{safeOriginal}\"");
         }
 
+       
         public void Dispose()
         {
             Dispose(true);
