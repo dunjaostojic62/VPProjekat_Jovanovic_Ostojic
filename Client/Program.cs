@@ -44,7 +44,7 @@ namespace Client
                 {
                     uzorci = reader.ReadSamples(countryCode, selectedDate);
                 }
-                Console.WriteLine($"[Client] Procitano {uzorci.Count} uzoraka (Zadatak 5 ce ovo popuniti).");
+                Console.WriteLine($"[Client] Procitano {uzorci.Count} uzoraka.");
 
                 using (LoadClient client = new LoadClient("LoadEndpoint"))
                 {
@@ -60,21 +60,43 @@ namespace Client
                     bool simulateAbort = bool.TryParse(
                             ConfigurationManager.AppSettings["simulateAbort"], out bool sa) && sa;
                     int poslato = 0;
+                    int brojBlokova = 0;
+                    int ukupnoBlokova = (int)Math.Ceiling((double)uzorci.Count / batchSize);
+
                     for (int i = 0; i < uzorci.Count; i += batchSize)
                     {
                         int velicina = Math.Min(batchSize, uzorci.Count - i);
                         List<LoadSample> batch = uzorci.GetRange(i, velicina);
+
+                        brojBlokova++;
+                        Console.WriteLine($"[Client] Saljem blok {brojBlokova}/{ukupnoBlokova} ({velicina} uzoraka)...");
+
                         client.PushBatch(batch);
+
                         poslato += velicina;
-                        Console.WriteLine($"[Client] Blok poslat ({velicina} uzoraka). Ukupno: {poslato}/{uzorci.Count}");
-                        if (simulateAbort && poslato >= uzorci.Count / 2)
-                        {
-                            throw new InvalidOperationException(
-                                "[Client] SIMULACIJA: prekid prenosa nasred slanja!");
-                        }
+                        Console.WriteLine($"[Client] Blok {brojBlokova}/{ukupnoBlokova} primljen na serveru. Ukupno uzoraka: {poslato}/{uzorci.Count}");
                     }
+
                     client.EndSession();
-                    Console.WriteLine("[Client] EndSession poslat.");
+                    Console.WriteLine($"[Client] Prenos zavrsen. Poslato {brojBlokova} blokova, {poslato} uzoraka.");
+
+                    Console.WriteLine("[Client] Preuzimam session.csv sa servera...");
+                    SessionFileRequest req = new SessionFileRequest(countryCode, selectedDate);
+                    using (SessionFilePackage package = client.GetSessionFile(req))
+                    {
+                        string lokalniPath = $"received_{countryCode}_{selectedDate:yyyy-MM-dd}_{package.FileName}";
+                        using (FileStream fs = new FileStream(lokalniPath, FileMode.Create, FileAccess.Write))
+                        {
+                            package.Content.Position = 0;
+                            byte[] buffer = new byte[1024];
+                            int count;
+                            while ((count = package.Content.Read(buffer, 0, buffer.Length)) > 0)
+                            {
+                                fs.Write(buffer, 0, count);
+                            }
+                        }
+                        Console.WriteLine($"[Client] Sacuvano kao: {lokalniPath} ({package.Content.Length} bajtova).");
+                    }
                 }
             }
             catch (FaultException<DataFormatFault> fe)

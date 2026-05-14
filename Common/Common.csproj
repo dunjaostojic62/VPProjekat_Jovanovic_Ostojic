@@ -47,6 +47,8 @@
     <Compile Include="ILoadService.cs" />
     <Compile Include="LoadSample.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
+    <Compile Include="SessionFilePackage.cs" />
+    <Compile Include="SessionFileRequest.cs" />
     <Compile Include="SessionMeta.cs" />
     <Compile Include="ValidationFault.cs" />
   </ItemGroup>

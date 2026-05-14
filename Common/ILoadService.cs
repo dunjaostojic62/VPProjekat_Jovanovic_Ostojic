@@ -23,5 +23,9 @@ namespace Common
 
         [OperationContract]
         void EndSession();
+
+        [OperationContract]
+        [FaultContract(typeof(DataFormatFault))]
+        SessionFilePackage GetSessionFile(SessionFileRequest request);
     }
 }

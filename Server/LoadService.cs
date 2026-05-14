@@ -146,6 +146,56 @@ namespace Server
             Console.WriteLine($"[Server] Snimljeno u: {sessionFolder}");
         }
 
+        [OperationBehavior(AutoDisposeParameters = true)]
+        public SessionFilePackage GetSessionFile(SessionFileRequest request)
+        {
+            if (request == null)
+            {
+                throw new FaultException<DataFormatFault>(
+                    new DataFormatFault("Request ne sme biti null."));
+            }
+            if (string.IsNullOrWhiteSpace(request.CountryCode))
+            {
+                throw new FaultException<DataFormatFault>(
+                    new DataFormatFault("CountryCode je obavezan."));
+            }
+
+            string root = ConfigurationManager.AppSettings["dataFolderPath"];
+            if (string.IsNullOrWhiteSpace(root))
+            {
+                throw new FaultException<DataFormatFault>(
+                    new DataFormatFault("U App.config nije definisan kljuc 'dataFolderPath'."));
+            }
+
+            string folder = Path.Combine(root,
+                                         request.CountryCode,
+                                         request.Date.ToString("yyyy-MM-dd"));
+            string sessionPath = Path.Combine(folder, "session.csv");
+
+            if (!File.Exists(sessionPath))
+            {
+                throw new FaultException<DataFormatFault>(
+                    new DataFormatFault($"Fajl ne postoji: {sessionPath}"));
+            }
+
+            // V5 obrazac - ucitavanje fajla u MemoryStream pa slanje preko mreze
+            MemoryStream ms = new MemoryStream();
+            using (FileStream fs = new FileStream(sessionPath, FileMode.Open, FileAccess.Read))
+            {
+                byte[] buffer = new byte[1024];
+                int count;
+                while ((count = fs.Read(buffer, 0, buffer.Length)) > 0)
+                {
+                    ms.Write(buffer, 0, count);
+                }
+            }
+            ms.Position = 0;
+
+            Console.WriteLine($"[Server] GetSessionFile: poslat {sessionPath} ({ms.Length} bajtova).");
+
+            return new SessionFilePackage("session.csv", ms);
+        }
+
         private void UpisiURejects(LoadSample s, string razlog)
         {
             string original = $"UTC={s.TimestampUtc:yyyy-MM-ddTHH:mm:ssZ} " +

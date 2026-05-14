@@ -42,6 +42,11 @@ namespace Client
             if (disposed) throw new ObjectDisposedException(nameof(LoadClient));
             proxy.EndSession();
         }
+        public SessionFilePackage GetSessionFile(SessionFileRequest request)
+        {
+            if (disposed) throw new ObjectDisposedException(nameof(LoadClient));
+            return proxy.GetSessionFile(request);
+        }
 
         public void Dispose()
         {
