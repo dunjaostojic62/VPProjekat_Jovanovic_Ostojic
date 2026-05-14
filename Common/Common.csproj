@@ -43,6 +43,7 @@
     <Reference Include="System.Xml" />
   </ItemGroup>
   <ItemGroup>
+    <Compile Include="BatchReceivedEventArgs.cs" />
     <Compile Include="DataFormatFault.cs" />
     <Compile Include="ILoadService.cs" />
     <Compile Include="LoadSample.cs" />
@@ -50,7 +51,10 @@
     <Compile Include="SessionFilePackage.cs" />
     <Compile Include="SessionFileRequest.cs" />
     <Compile Include="SessionMeta.cs" />
+    <Compile Include="TransferCompletedEventArgs.cs" />
+    <Compile Include="TransferStartedEventArgs.cs" />
     <Compile Include="ValidationFault.cs" />
+    <Compile Include="WarningEventArgs.cs" />
   </ItemGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
 </Project>

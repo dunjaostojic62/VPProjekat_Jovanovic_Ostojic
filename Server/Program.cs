@@ -8,11 +8,18 @@ namespace Server
     {
         static void Main(string[] args)
         {
-
             ServiceHost host = null;
+            LoadService publisher = null;
+            LoadServiceListener listener = null;
+
             try
             {
-                host = new ServiceHost(typeof(LoadService));
+                // Z8 - kreiramo instancu publisher-a i pretplacujemo Listener PRE pokretanja hosta
+                publisher = new LoadService();
+                listener = new LoadServiceListener(publisher);
+
+                // ServiceHost prima INSTANCU (ne tip) - V1 obrazac, ali sa instancom umesto tipa
+                host = new ServiceHost(publisher);
                 host.Open();
 
                 Console.WriteLine("==========================================");
@@ -21,16 +28,16 @@ namespace Server
                 Console.WriteLine("  Pritisnite ENTER za zatvaranje servisa.");
                 Console.WriteLine("==========================================");
                 Console.ReadLine();
-
             }
             catch (Exception ex)
             {
                 Console.WriteLine($"[Server] Greska pri pokretanju servisa: {ex.Message}");
-
-                host?.Abort();
             }
             finally
             {
+                // V6 - otpisivanje sa dogadjaja (upravljanje memorijom)
+                listener?.Detach();
+
                 if (host != null)
                 {
                     try
@@ -63,6 +70,8 @@ namespace Server
                     }
                 }
             }
+            Console.WriteLine("\n[Server] Pritisnite bilo koji taster za izlaz...");
+            Console.ReadKey();
         }
     }
 }

@@ -7,8 +7,8 @@ using System.IO;
 
 namespace Server
 {
-    
-    [ServiceBehavior(InstanceContextMode = InstanceContextMode.PerSession)]
+
+    [ServiceBehavior(InstanceContextMode = InstanceContextMode.Single)]
     public class LoadService : ILoadService
     {
         SessionMeta currentMeta;
@@ -20,17 +20,20 @@ namespace Server
         StreamWriter rejectsWriter;
         string sessionFolder;
 
+        public event EventHandler<TransferStartedEventArgs> OnTransferStarted;
+        public event EventHandler<BatchReceivedEventArgs> OnBatchReceived;
+        public event EventHandler<TransferCompletedEventArgs> OnTransferCompleted;
+        public event EventHandler<WarningEventArgs> OnWarningRaised;
+        int totalReceived;
         public LoadService()
         {
             this.lastCumulative = 0;
             this.sessionActive = false;
         }
 
-      
         [OperationBehavior(AutoDisposeParameters = true)]
         public void StartSession(SessionMeta meta)
         {
-           
             if (meta == null)
             {
                 throw new FaultException<DataFormatFault>(
@@ -56,7 +59,6 @@ namespace Server
             this.lastCumulative = 0;
             Console.WriteLine($"[Server] StartSession primljen:");
             Console.WriteLine($"         {meta}");
-
             //za data strukturu
             string root = ConfigurationManager.AppSettings["dataFolderPath"];
             if (string.IsNullOrWhiteSpace(root))
@@ -64,7 +66,6 @@ namespace Server
                 throw new FaultException<DataFormatFault>(
                     new DataFormatFault("U App.config nije definisan kljuc 'dataFolderPath'."));
             }
-
             this.sessionFolder = Path.Combine(root,
                                               meta.CountryCode,
                                               meta.Date.ToString("yyyy-MM-dd"));
@@ -81,8 +82,9 @@ namespace Server
             rejectsStream = new FileStream(rejectsPath, FileMode.Create, FileAccess.Write);
             rejectsWriter = new StreamWriter(rejectsStream);
             rejectsWriter.WriteLine("RowIndex,Reason,OriginalSample");
-
             Console.WriteLine($"         Izlazni folder: {sessionFolder}");
+            this.totalReceived = 0;
+            RaiseTransferStarted(meta);
         }
 
         [OperationBehavior(AutoDisposeParameters = true)]
@@ -98,8 +100,6 @@ namespace Server
                 throw new FaultException<ValidationFault>(
                     new ValidationFault("Batch je prazan."));
             }
-
-         
             foreach (LoadSample s in samples)
             {
                 try
@@ -125,9 +125,9 @@ namespace Server
                     throw;
                 }
             }
-
-            Console.WriteLine($"[Server] Blok primljen: {samples.Count} uzoraka. " +
-                              $"Trenutni kumulativ: {lastCumulative:F2} MWh");
+            Console.WriteLine($"[Server] Blok primljen: {samples.Count} uzoraka. " + $"Trenutni kumulativ: {lastCumulative:F2} MWh");
+            this.totalReceived += samples.Count;
+            RaiseBatchReceived(samples.Count, totalReceived, lastCumulative);
         }
 
         public void EndSession()
@@ -136,6 +136,8 @@ namespace Server
             Console.WriteLine($"[Server] EndSession - prenos zavrsen za " +
                               $"{currentMeta?.CountryCode} ({currentMeta?.Date:yyyy-MM-dd}). " +
                               $"Finalni kumulativ: {lastCumulative:F2} MWh");
+
+            RaiseTransferCompleted(currentMeta.CountryCode, currentMeta.Date, totalReceived, lastCumulative);
             //zatvaranje stream-a
             sessionWriter?.Flush();
             rejectsWriter?.Flush();
@@ -177,7 +179,6 @@ namespace Server
                 throw new FaultException<DataFormatFault>(
                     new DataFormatFault($"Fajl ne postoji: {sessionPath}"));
             }
-
             // V5 obrazac - ucitavanje fajla u MemoryStream pa slanje preko mreze
             MemoryStream ms = new MemoryStream();
             using (FileStream fs = new FileStream(sessionPath, FileMode.Open, FileAccess.Read))
@@ -192,7 +193,6 @@ namespace Server
             ms.Position = 0;
 
             Console.WriteLine($"[Server] GetSessionFile: poslat {sessionPath} ({ms.Length} bajtova).");
-
             return new SessionFilePackage("session.csv", ms);
         }
 
@@ -203,6 +203,34 @@ namespace Server
                               $"Cumulative={s.CumulativeMWh}";
             rejectsWriter.WriteLine($"{s.RowIndex},\"{razlog}\",\"{original}\"");
             rejectsWriter.Flush();
+        }
+        private void RaiseTransferStarted(SessionMeta meta)
+        {
+            if (OnTransferStarted != null)
+            {
+                OnTransferStarted(this, new TransferStartedEventArgs(meta));
+            }
+        }
+        private void RaiseBatchReceived(int batchSize, int totalReceived, double currentCumulative)
+        {
+            if (OnBatchReceived != null)
+            {
+                OnBatchReceived(this, new BatchReceivedEventArgs(batchSize, totalReceived, currentCumulative));
+            }
+        }
+        private void RaiseTransferCompleted(string country, DateTime date, int total, double finalCumulative)
+        {
+            if (OnTransferCompleted != null)
+            {
+                OnTransferCompleted(this, new TransferCompletedEventArgs(country, date, total, finalCumulative));
+            }
+        }
+        private void RaiseWarning(WarningType type, string message)
+        {
+            if (OnWarningRaised != null)
+            {
+                OnWarningRaised(this, new WarningEventArgs(type, message));
+            }
         }
 
         private void ValidateSample(LoadSample s)
@@ -227,8 +255,6 @@ namespace Server
                 throw new FaultException<ValidationFault>(
                     new ValidationFault($"ForecastMW mora biti >= 0 (red {s.RowIndex}, vrednost {s.ForecastMW})."));
             }
-
-            
             if (s.CumulativeMWh + 1e-9 < this.lastCumulative)
             {
                 throw new FaultException<ValidationFault>(
@@ -236,7 +262,6 @@ namespace Server
                         $"CumulativeMWh ({s.CumulativeMWh:F4}) je manji od prethodnog " +
                         $"({lastCumulative:F4}) - red {s.RowIndex}."));
             }
-
             this.lastCumulative = s.CumulativeMWh;
         }
     }
