@@ -1,13 +1,13 @@
 ﻿using Common;
 using System;
 using System.Collections.Generic;
-using System.ServiceModel;
 using System.Configuration;
+using System.Globalization;
 using System.IO;
+using System.ServiceModel;
 
 namespace Server
 {
-
     [ServiceBehavior(InstanceContextMode = InstanceContextMode.Single)]
     public class LoadService : ILoadService
     {
@@ -25,6 +25,14 @@ namespace Server
         public event EventHandler<TransferCompletedEventArgs> OnTransferCompleted;
         public event EventHandler<WarningEventArgs> OnWarningRaised;
         int totalReceived;
+
+        double loadFactorMin;        
+        double flatlineEpsilon;      
+        int flatlineWindowSamples;   
+        double spikeDeltaMW;         
+        double? prevActualMW;        
+        int flatlineConsecutive;    
+
         public LoadService()
         {
             this.lastCumulative = 0;
@@ -59,7 +67,8 @@ namespace Server
             this.lastCumulative = 0;
             Console.WriteLine($"[Server] StartSession primljen:");
             Console.WriteLine($"         {meta}");
-            //za data strukturu
+
+            
             string root = ConfigurationManager.AppSettings["dataFolderPath"];
             if (string.IsNullOrWhiteSpace(root))
             {
@@ -84,6 +93,21 @@ namespace Server
             rejectsWriter.WriteLine("RowIndex,Reason,OriginalSample");
             Console.WriteLine($"         Izlazni folder: {sessionFolder}");
             this.totalReceived = 0;
+
+            
+            this.loadFactorMin = ParseDoubleConfig("LoadFactorMin", 0.7);
+            this.flatlineEpsilon = ParseDoubleConfig("FlatlineEpsilon", 5.0);
+            this.flatlineWindowSamples = ParseIntConfig("FlatlineWindowSamples", 4);
+            this.spikeDeltaMW = ParseDoubleConfig("SpikeDeltaMW", 2000.0);
+            
+            this.prevActualMW = null;
+            this.flatlineConsecutive = 0;
+
+            Console.WriteLine($"         Pragovi: LoadFactorMin={loadFactorMin}, " +
+                              $"FlatlineEpsilon={flatlineEpsilon}, " +
+                              $"FlatlineWindow={flatlineWindowSamples}, " +
+                              $"SpikeDelta={spikeDeltaMW}");
+
             RaiseTransferStarted(meta);
         }
 
@@ -113,6 +137,9 @@ namespace Server
                         $"{s.CumulativeMWh}," +
                         $"{s.CountryCode}," +
                         $"{s.RowIndex}");
+
+                    
+                    RunAnalytics(s);
                 }
                 catch (FaultException<DataFormatFault> fe)
                 {
@@ -138,7 +165,7 @@ namespace Server
                               $"Finalni kumulativ: {lastCumulative:F2} MWh");
 
             RaiseTransferCompleted(currentMeta.CountryCode, currentMeta.Date, totalReceived, lastCumulative);
-            //zatvaranje stream-a
+           
             sessionWriter?.Flush();
             rejectsWriter?.Flush();
             sessionWriter?.Dispose();
@@ -179,7 +206,7 @@ namespace Server
                 throw new FaultException<DataFormatFault>(
                     new DataFormatFault($"Fajl ne postoji: {sessionPath}"));
             }
-            // V5 obrazac - ucitavanje fajla u MemoryStream pa slanje preko mreze
+            
             MemoryStream ms = new MemoryStream();
             using (FileStream fs = new FileStream(sessionPath, FileMode.Open, FileAccess.Read))
             {
@@ -263,6 +290,85 @@ namespace Server
                         $"({lastCumulative:F4}) - red {s.RowIndex}."));
             }
             this.lastCumulative = s.CumulativeMWh;
+        }
+
+        private void RunAnalytics(LoadSample s)
+        {
+            
+            if (s.ForecastMW != 0 &&
+                !double.IsNaN(s.ActualMW) &&
+                !double.IsNaN(s.ForecastMW))
+            {
+                double loadFactor = s.ActualMW / s.ForecastMW;
+                if (loadFactor < loadFactorMin)
+                {
+                    string msg = $"Hour={s.TimestampUtc:yyyy-MM-dd HH:mm}, " +
+                                 $"LoadFactor={loadFactor:F3}, " +
+                                 $"Country={s.CountryCode} " +
+                                 $"(prag={loadFactorMin:F2})";
+                    RaiseWarning(WarningType.LowLoadFactor, msg);
+                }
+            }
+
+           
+            if (prevActualMW.HasValue)
+            {
+                double delta = s.ActualMW - prevActualMW.Value;
+                double absDelta = Math.Abs(delta);
+
+                
+                if (absDelta < flatlineEpsilon)
+                {
+                    flatlineConsecutive++;
+                    if (flatlineConsecutive >= flatlineWindowSamples)
+                    {
+                        string msg = $"Flatline na {s.TimestampUtc:yyyy-MM-dd HH:mm}: " +
+                                     $"{flatlineConsecutive} uzastopnih uzoraka sa razlikom " +
+                                     $"< {flatlineEpsilon} MW (Country={s.CountryCode})";
+                        RaiseWarning(WarningType.Flatline, msg);
+                        flatlineConsecutive = 0; 
+                    }
+                }
+                else
+                {
+                    
+                    flatlineConsecutive = 0;
+                }
+
+               
+                if (absDelta > spikeDeltaMW)
+                {
+                    string smer = delta > 0 ? "uvecanje" : "smanjenje";
+                    string msg = $"Spike na {s.TimestampUtc:yyyy-MM-dd HH:mm}: " +
+                                 $"delta={absDelta:F2} MW ({smer}), " +
+                                 $"prag={spikeDeltaMW} MW (Country={s.CountryCode})";
+                    RaiseWarning(WarningType.ConsumptionSpike, msg);
+                }
+            }
+
+           
+            prevActualMW = s.ActualMW;
+        }
+
+        
+        private double ParseDoubleConfig(string key, double defaultValue)
+        {
+            string raw = ConfigurationManager.AppSettings[key];
+            if (double.TryParse(raw, NumberStyles.Float, CultureInfo.InvariantCulture, out double v))
+            {
+                return v;
+            }
+            return defaultValue;
+        }
+
+        private int ParseIntConfig(string key, int defaultValue)
+        {
+            string raw = ConfigurationManager.AppSettings[key];
+            if (int.TryParse(raw, out int v))
+            {
+                return v;
+            }
+            return defaultValue;
         }
     }
 }
